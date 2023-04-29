@@ -31,7 +31,10 @@ pub const MAX_TRANSP_A: f32 = 255. / 256. * LIQ_WEIGHT_A;
 pub struct f_pixel(pub ARGBF);
 
 impl f_pixel {
-    #[cfg(not(any(target_arch = "x86_64", all(target_feature = "neon", target_arch = "aarch64"))))]
+    #[cfg(not(any(
+        target_arch = "x86_64",
+        all(target_feature = "neon", target_arch = "aarch64")
+    )))]
     #[inline(always)]
     pub fn diff(&self, other: &f_pixel) -> f32 {
         let alphas = other.0.a - self.0.a;
@@ -42,9 +45,9 @@ impl f_pixel {
             g: black.g + alphas,
             b: black.b + alphas,
         };
-        (black.r * black.r).max(white.r * white.r) +
-        (black.g * black.g).max(white.g * white.g) +
-        (black.b * black.b).max(white.b * white.b)
+        (black.r * black.r).max(white.r * white.r)
+            + (black.g * black.g).max(white.g * white.g)
+            + (black.b * black.b).max(white.b * white.b)
     }
 
     #[cfg(all(target_feature = "neon", target_arch = "aarch64"))]
@@ -75,7 +78,7 @@ impl f_pixel {
             vst1q_f32(max_gb.as_mut_ptr(), vpaddq_f32(max, max));
 
             // add rgb, not a
-            
+
             max_r[1] + max_gb[1]
         }
     }
@@ -203,8 +206,12 @@ pub type PalIndex = u16;
 #[cfg(not(feature = "large_palettes"))]
 pub type PalIndex = u8;
 
-/// This could be increased to support > 256 colors in remapping too
+#[cfg(feature = "large_palette_remap")]
+pub type PalIndexRemap = u16;
+
+#[cfg(not(feature = "large_palette_remap"))]
 pub type PalIndexRemap = u8;
+
 pub type PalLen = u16;
 
 /// Palettes are stored on the stack, and really large ones will cause stack overflows
@@ -250,7 +257,11 @@ impl PalF {
     }
 
     // this is max colors allowed by the user, not just max in the current (candidate/low-quality) palette
-    pub(crate) fn with_fixed_colors(mut self, max_colors: PalLen, fixed_colors: &[f_pixel]) -> PalF {
+    pub(crate) fn with_fixed_colors(
+        mut self,
+        max_colors: PalLen,
+        fixed_colors: &[f_pixel],
+    ) -> PalF {
         if fixed_colors.is_empty() {
             return self;
         }
@@ -259,25 +270,37 @@ impl PalF {
         let max_fixed_colors = fixed_colors.len().min(max_colors as usize);
         if self.len() < max_fixed_colors {
             let needs_extra = max_fixed_colors - self.len();
-            self.colors.extend(fixed_colors.iter().copied().take(needs_extra));
-            self.pops.extend(std::iter::repeat(PalPop::new(0.)).take(needs_extra));
+            self.colors
+                .extend(fixed_colors.iter().copied().take(needs_extra));
+            self.pops
+                .extend(std::iter::repeat(PalPop::new(0.)).take(needs_extra));
             debug_assert_eq!(self.len(), max_fixed_colors);
         }
 
         // since the fixed colors were in the histogram, expect them to be in the palette,
         // and change closest existing one to be exact fixed
         for (i, fixed_color) in fixed_colors.iter().enumerate().take(self.len()) {
-            let (best_idx, _) = self.colors.iter().enumerate().skip(i).min_by_key(|(_, pal_color)| {
-                // not using Nearest, because creation of the index may take longer than naive search once
-                OrdFloat::new(pal_color.diff(fixed_color))
-            }).expect("logic bug in fixed colors, please report a bug");
+            let (best_idx, _) = self
+                .colors
+                .iter()
+                .enumerate()
+                .skip(i)
+                .min_by_key(|(_, pal_color)| {
+                    // not using Nearest, because creation of the index may take longer than naive search once
+                    OrdFloat::new(pal_color.diff(fixed_color))
+                })
+                .expect("logic bug in fixed colors, please report a bug");
             debug_assert!(best_idx >= i);
             self.swap(i, best_idx);
             self.set(i, *fixed_color, self.pops[i].to_fixed());
         }
 
         debug_assert!(self.colors.iter().zip(fixed_colors).all(|(p, f)| p == f));
-        debug_assert!(self.pops.iter().take(fixed_colors.len()).all(|pop| pop.is_fixed()));
+        debug_assert!(self
+            .pops
+            .iter()
+            .take(fixed_colors.len())
+            .all(|pop| pop.is_fixed()));
         self
     }
 
@@ -301,10 +324,16 @@ impl PalF {
     }
 
     /// Also rounds the input pal
-    pub(crate) fn init_int_palette(&mut self, int_palette: &mut Palette, gamma: f64, posterize: u8) {
+    pub(crate) fn init_int_palette(
+        &mut self,
+        int_palette: &mut Palette,
+        gamma: f64,
+        posterize: u8,
+    ) {
         let lut = gamma_lut(gamma);
         for ((f_color, f_pop), int_pal) in self.iter_mut().zip(&mut int_palette.entries) {
-            let mut px = f_color.to_rgb(gamma)
+            let mut px = f_color
+                .to_rgb(gamma)
                 .map(move |c| posterize_channel(c, posterize));
             *f_color = f_pixel::from_rgba(&lut, px);
             if px.a == 0 && !f_pop.is_fixed() {
@@ -379,24 +408,84 @@ impl Palette {
 
 #[test]
 fn diff_test() {
-    let a = f_pixel(ARGBF {a: 1., r: 0.2, g: 0.3, b: 0.5});
-    let b = f_pixel(ARGBF {a: 1., r: 0.3, g: 0.3, b: 0.5});
-    let c = f_pixel(ARGBF {a: 1., r: 1., g: 0.3, b: 0.5});
-    let d = f_pixel(ARGBF {a: 0., r: 1., g: 0.3, b: 0.5});
+    let a = f_pixel(ARGBF {
+        a: 1.,
+        r: 0.2,
+        g: 0.3,
+        b: 0.5,
+    });
+    let b = f_pixel(ARGBF {
+        a: 1.,
+        r: 0.3,
+        g: 0.3,
+        b: 0.5,
+    });
+    let c = f_pixel(ARGBF {
+        a: 1.,
+        r: 1.,
+        g: 0.3,
+        b: 0.5,
+    });
+    let d = f_pixel(ARGBF {
+        a: 0.,
+        r: 1.,
+        g: 0.3,
+        b: 0.5,
+    });
     assert!(a.diff(&b) < b.diff(&c));
     assert!(c.diff(&b) < c.diff(&d));
 
-    let a = f_pixel(ARGBF {a: 1., b: 0.2, r: 0.3, g: 0.5});
-    let b = f_pixel(ARGBF {a: 1., b: 0.3, r: 0.3, g: 0.5});
-    let c = f_pixel(ARGBF {a: 1., b: 1., r: 0.3, g: 0.5});
-    let d = f_pixel(ARGBF {a: 0., b: 1., r: 0.3, g: 0.5});
+    let a = f_pixel(ARGBF {
+        a: 1.,
+        b: 0.2,
+        r: 0.3,
+        g: 0.5,
+    });
+    let b = f_pixel(ARGBF {
+        a: 1.,
+        b: 0.3,
+        r: 0.3,
+        g: 0.5,
+    });
+    let c = f_pixel(ARGBF {
+        a: 1.,
+        b: 1.,
+        r: 0.3,
+        g: 0.5,
+    });
+    let d = f_pixel(ARGBF {
+        a: 0.,
+        b: 1.,
+        r: 0.3,
+        g: 0.5,
+    });
     assert!(a.diff(&b) < b.diff(&c));
     assert!(c.diff(&b) < c.diff(&d));
 
-    let a = f_pixel(ARGBF {a: 1., g: 0.2, b: 0.3, r: 0.5});
-    let b = f_pixel(ARGBF {a: 1., g: 0.3, b: 0.3, r: 0.5});
-    let c = f_pixel(ARGBF {a: 1., g: 1., b: 0.3, r: 0.5});
-    let d = f_pixel(ARGBF {a: 0., g: 1., b: 0.3, r: 0.5});
+    let a = f_pixel(ARGBF {
+        a: 1.,
+        g: 0.2,
+        b: 0.3,
+        r: 0.5,
+    });
+    let b = f_pixel(ARGBF {
+        a: 1.,
+        g: 0.3,
+        b: 0.3,
+        r: 0.5,
+    });
+    let c = f_pixel(ARGBF {
+        a: 1.,
+        g: 1.,
+        b: 0.3,
+        r: 0.5,
+    });
+    let d = f_pixel(ARGBF {
+        a: 0.,
+        g: 1.,
+        b: 0.3,
+        r: 0.5,
+    });
     assert!(a.diff(&b) < b.diff(&c));
     assert!(c.diff(&b) < c.diff(&d));
 }
@@ -435,7 +524,7 @@ fn largepal() {
     let gamma = gamma_lut(0.5);
     let mut p = PalF::new();
     for i in 0..1000 {
-        let rgba = RGBA::new(i as u8, (i/2) as u8, (i/4) as u8, 255);
+        let rgba = RGBA::new(i as u8, (i / 2) as u8, (i / 4) as u8, 255);
         p.push(f_pixel::from_rgba(&gamma, rgba), PalPop::new(1.));
     }
 }
