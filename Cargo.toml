@@ -19,6 +19,7 @@ default = ["threads"]
 threads = ["dep:rayon", "dep:num_cpus", "dep:thread_local"]
 # supports up to 2048 colors for palettes, but NOT FOR REMAPPING
 large_palettes = []
+large_palette_remap = []
 
 # this is private and unstable for imagequant-sys only, do not use
 _internal_c_ffi = []
